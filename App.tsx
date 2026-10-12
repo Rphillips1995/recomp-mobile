@@ -1,38 +1,124 @@
-import React,{useCallback,useEffect,useState} from 'react';
-import {Alert,SafeAreaView,ScrollView,View,Text,TextInput,Pressable,StyleSheet} from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 import * as SQLite from 'expo-sqlite';
-import {OpeningSequence} from './src/opening/OpeningSequence';
-import {hasCompletedOpening} from './src/opening/launch';
-import {RecordScreen} from './src/record/RecordScreen';
-import {Entry,Exercise,Workout} from './src/workout';
-import {StatusBar} from 'expo-status-bar';
+import { StatusBar } from 'expo-status-bar';
+import { OpeningSequence } from './src/opening/OpeningSequence';
+import { hasCompletedOpening } from './src/opening/launch';
+import { RecordScreen } from './src/record/RecordScreen';
+import { Workout } from './src/workout';
+import { WorkoutEditor } from './src/logger/WorkoutEditor';
+import { ArchiveSession } from './src/logger/ArchiveSession';
+import { cloneWorkout, prepareWorkout } from './src/logger/workouts';
+import { newRecords, recordBook } from './src/logger/records';
+import { Action, C, S } from './src/logger/ui';
 
-const empty=():Entry=>({weight:'',reps:'',minutes:'',distance:''});
-const C={bg:'#0B0C0D',panel:'#171C24',line:'#2C2E2E',ink:'#E8E4DC',muted:'#A3ADB7',gold:'#A68F6B'};
-export default function App(){
- const [showOpening,setShowOpening]=useState(()=>!hasCompletedOpening());
- const finishOpening=useCallback(()=>setShowOpening(false),[]);
- const [db,setDb]=useState<SQLite.SQLiteDatabase|null>(null);
- const [history,setHistory]=useState<Workout[]>([]);
- const [workout,setWorkout]=useState<Workout|null>(null);
- const [tab,setTab]=useState<'record'|'train'|'archive'>('record');
- const [exerciseName,setExerciseName]=useState('');
- const [kind,setKind]=useState<'strength'|'cardio'>('strength');
- useEffect(()=>{let live=true;(async()=>{try{const d=await SQLite.openDatabaseAsync('recomp.db');await d.execAsync('CREATE TABLE IF NOT EXISTS workouts(id TEXT PRIMARY KEY,date TEXT NOT NULL,json TEXT NOT NULL)');if(live){setDb(d);const rows=await d.getAllAsync<{json:string}>('SELECT json FROM workouts ORDER BY date DESC');setHistory(rows.map(r=>JSON.parse(r.json)))}}catch(e){Alert.alert('Database error',String(e))}})();return()=>{live=false}},[]);
- const refresh=async()=>{if(db){const rows=await db.getAllAsync<{json:string}>('SELECT json FROM workouts ORDER BY date DESC');setHistory(rows.map(r=>JSON.parse(r.json)))}};
- const change=(fn:(w:Workout)=>Workout)=>setWorkout(w=>w?fn(w):w);
- const exerciseChange=(i:number,fn:(e:Exercise)=>Exercise)=>change(w=>({...w,exercises:w.exercises.map((e,j)=>i===j?fn(e):e)}));
- const setChange=(i:number,j:number,key:keyof Entry,value:string)=>exerciseChange(i,e=>({...e,sets:e.sets.map((s,k)=>k===j?{...s,[key]:value}:s)}));
- const previous=(name:string,type:string)=>history.flatMap(h=>h.exercises).find(e=>e.name.toLowerCase()===name.toLowerCase()&&e.type===type);
- const start=()=>{if(workout){setTab('train');return}setWorkout({id:String(Date.now()),date:new Date().toISOString(),name:'Training Session',exercises:[]});setTab('train')};
- const add=()=>{if(!exerciseName.trim())return;change(w=>({...w,exercises:[...w.exercises,{name:exerciseName.trim(),type:kind,sets:[empty()]}]}));setExerciseName('')};
- const save=async()=>{if(!db||!workout)return;if(!workout.exercises.some(e=>e.sets.some(s=>e.type==='strength'?s.weight!==''&&s.reps!=='':s.minutes!==''))){Alert.alert('Nothing to save','Enter at least one completed set or cardio interval.');return}try{await db.runAsync('INSERT INTO workouts(id,date,json) VALUES(?,?,?)',workout.id,workout.date,JSON.stringify(workout));await refresh();setWorkout(null);setTab('record');Alert.alert('Session recorded','The work continues.')}catch(e){Alert.alert('Save failed',String(e))}};
- const remove=(id:string)=>Alert.alert('Delete session?','This cannot be undone.',[{text:'Cancel'},{text:'Delete',style:'destructive',onPress:async()=>{await db?.runAsync('DELETE FROM workouts WHERE id=?',id);await refresh()}}]);
- const button=(label:string,fn:()=>void,primary=false)=><Pressable accessibilityRole="button" onPress={fn} style={[S.button,primary&&S.primary]}><Text style={[S.buttonText,primary&&{color:C.bg}]}>{label}</Text></Pressable>;
- return <View style={S.root}><StatusBar style="light"/><SafeAreaView style={S.root} accessibilityElementsHidden={showOpening} importantForAccessibility={showOpening?'no-hide-descendants':'auto'} pointerEvents={showOpening?'none':'auto'}><View style={S.header}><Text style={S.brand}>RECOMP</Text><Text style={S.eyebrow}>THE WORK CONTINUES.</Text></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[S.content,tab==='record'&&S.recordContent]}>
- {tab==='record'&&<RecordScreen history={history} workout={workout} onTrain={start} onArchive={()=>setTab('archive')}/>}
- {tab==='train'&&<><Text style={S.eyebrow}>TRAINING / SESSION</Text><Text style={S.title}>The Work</Text>{!workout?button('BEGIN TRAINING  →',start,true):<><TextInput style={S.input} accessibilityLabel="Workout name" value={workout.name} onChangeText={v=>change(w=>({...w,name:v}))}/>{workout.exercises.map((e,i)=><View key={i} style={S.card}><Text style={S.subtitle}>{e.name}</Text>{previous(e.name,e.type)&&<><Text style={S.muted}>Previous: {previous(e.name,e.type)!.sets.map(s=>e.type==='strength'?s.weight+' lb × '+s.reps:s.minutes+' min').join(' · ')}</Text>{button('USE PREVIOUS VALUES',()=>exerciseChange(i,x=>({...x,sets:previous(e.name,e.type)!.sets.map(s=>({...s}))})))}</>}{e.sets.map((s,j)=><View key={j} style={S.row}><Text style={S.muted}>{j+1}</Text>{(e.type==='strength'?['weight','reps']:['minutes','distance']).map(k=><TextInput key={k} accessibilityLabel={e.name+' '+k+' set '+(j+1)} style={S.smallInput} keyboardType="decimal-pad" placeholder={k==='weight'?'lb':k==='distance'?'miles':k} placeholderTextColor={C.muted} value={s[k as keyof Entry]} onChangeText={v=>setChange(i,j,k as keyof Entry,v)}/>)}</View>)}{button('+ ADD SET / INTERVAL',()=>exerciseChange(i,x=>({...x,sets:[...x.sets,empty()]})))}{button('REMOVE EXERCISE',()=>change(w=>({...w,exercises:w.exercises.filter((_,j)=>j!==i)})))}</View>)}<View style={S.card}><Text style={S.eyebrow}>ADD EXERCISE</Text><View style={S.row}>{button('STRENGTH',()=>setKind('strength'),kind==='strength')}{button('CARDIO',()=>setKind('cardio'),kind==='cardio')}</View><TextInput style={S.input} placeholder="Exercise name" placeholderTextColor={C.muted} value={exerciseName} onChangeText={setExerciseName}/>{button('+ ADD EXERCISE',add)}</View>{button('COMPLETE SESSION  →',save,true)}{button('DISCARD SESSION',()=>Alert.alert('Discard session?','Unsaved work will be lost.',[{text:'Cancel'},{text:'Discard',style:'destructive',onPress:()=>setWorkout(null)}]))}</>}</>}
- {tab==='archive'&&<><Text style={S.eyebrow}>TRAINING HISTORY</Text><Text style={S.title}>The Archive</Text>{history.length===0?<Text style={S.muted}>No sessions yet.</Text>:history.map(h=><View key={h.id} style={S.card}><Text style={S.subtitle}>{h.name}</Text><Text style={S.muted}>{new Date(h.date).toLocaleDateString()}</Text>{h.exercises.map((e,i)=><View key={i} style={{marginTop:12}}><Text style={S.text}>{e.name}</Text><Text style={S.muted}>{e.sets.map(s=>e.type==='strength'?s.weight+' lb × '+s.reps:s.minutes+' min / '+s.distance+' mi').join(' · ')}</Text></View>)}{button('DELETE SESSION',()=>remove(h.id))}</View>)}</>}
- </ScrollView><View style={S.nav}>{(['record','train','archive'] as const).map(t=><Pressable accessibilityRole="tab" accessibilityState={{selected:tab===t}} key={t} style={S.navItem} onPress={()=>setTab(t)}><Text style={[S.eyebrow,tab===t&&{color:C.gold}]}>{t.toUpperCase()}</Text></Pressable>)}</View></SafeAreaView>{showOpening&&<OpeningSequence onComplete={finishOpening}/>}</View>
+export default function App() {
+  const [showOpening, setShowOpening] = useState(() => !hasCompletedOpening());
+  const finishOpening = useCallback(() => setShowOpening(false), []);
+  const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
+  const [history, setHistory] = useState<Workout[]>([]);
+  const [workout, setWorkout] = useState<Workout | null>(null);
+  const [editing, setEditing] = useState<Workout | null>(null);
+  const [tab, setTab] = useState<'record' | 'train' | 'archive'>('record');
+  const [busy, setBusy] = useState(false);
+  const mutationInFlight = useRef(false);
+  const scroll = useRef<ScrollView>(null);
+  const bests = useMemo(() => recordBook(history), [history]);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const database = await SQLite.openDatabaseAsync('recomp.db');
+        await database.execAsync('CREATE TABLE IF NOT EXISTS workouts(id TEXT PRIMARY KEY,date TEXT NOT NULL,json TEXT NOT NULL)');
+        const rows = await database.getAllAsync<{ json: string }>('SELECT json FROM workouts ORDER BY date DESC');
+        if (live) { setHistory(rows.map(row => JSON.parse(row.json))); setDb(database); }
+      } catch (error) { if (live) Alert.alert('Database error', String(error)); }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  const navigate = (next: typeof tab) => { if (!mutationInFlight.current) { setTab(next); scroll.current?.scrollTo({ y: 0, animated: false }); } };
+  const start = () => {
+    if (!workout) setWorkout({ id: String(Date.now()), date: new Date().toISOString(), name: 'Training Session', exercises: [] });
+    navigate('train');
+  };
+  const edit = (session: Workout) => { setEditing(cloneWorkout(session)); scroll.current?.scrollTo({ y: 0, animated: false }); };
+  const cancelEditing = () => {
+    if (!editing || mutationInFlight.current) return;
+    const close = () => { setEditing(null); scroll.current?.scrollTo({ y: 0, animated: false }); };
+    if (JSON.stringify(editing) === JSON.stringify(history.find(session => session.id === editing.id))) close();
+    else Alert.alert('Discard changes?', 'The saved session will stay as it was.', [
+      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard changes', style: 'destructive', onPress: close },
+    ]);
+  };
+  const save = async (draft: Workout, isEdit: boolean) => {
+    if (!db || mutationInFlight.current) return;
+    const prepared = prepareWorkout(draft);
+    if (prepared.error) { Alert.alert('Check your session', prepared.error); return; }
+    const saved = prepared.workout!;
+    const records = newRecords(saved, history);
+    mutationInFlight.current = true;
+    setBusy(true);
+    try {
+      if (isEdit) {
+        const result = await db.runAsync('UPDATE workouts SET json=? WHERE id=?', JSON.stringify(saved), saved.id);
+        if (result.changes !== 1) throw new Error('This session is no longer in the archive. Your changes have not been saved.');
+      } else {
+        await db.runAsync('INSERT INTO workouts(id,date,json) VALUES(?,?,?)', saved.id, saved.date, JSON.stringify(saved));
+      }
+      // The write has succeeded. Update memory directly, so a failed follow-up
+      // read can never leave a saved draft open and cause a duplicate insert.
+      setHistory(current => [saved, ...current.filter(session => session.id !== saved.id)].sort((a, b) => b.date.localeCompare(a.date)));
+      if (isEdit) { setEditing(null); setTab('archive'); }
+      else { setWorkout(null); setTab('record'); }
+      scroll.current?.scrollTo({ y: 0, animated: false });
+      const message = records.length ? `Personal record${records.length === 1 ? '' : 's'}:\n${records.map(record => `${record.exerciseName}: ${record.label}`).join('\n')}` : isEdit ? 'Your record has been updated.' : 'The work continues.';
+      Alert.alert(isEdit ? 'Session updated' : 'Session recorded', message);
+    } catch (error) { Alert.alert('Save failed', String(error)); }
+    finally { mutationInFlight.current = false; setBusy(false); }
+  };
+  const remove = (id: string) => Alert.alert('Delete session?', 'This cannot be undone. Personal records will be recalculated.', [
+    { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: async () => {
+      if (!db || mutationInFlight.current) return;
+      mutationInFlight.current = true; setBusy(true);
+      try { await db.runAsync('DELETE FROM workouts WHERE id=?', id); setHistory(current => current.filter(session => session.id !== id)); }
+      catch (error) { Alert.alert('Delete failed', String(error)); }
+      finally { mutationInFlight.current = false; setBusy(false); }
+    } },
+  ]);
+
+  return <View style={S.root}>
+    <StatusBar style="light"/>
+    <SafeAreaView style={S.root} accessibilityElementsHidden={showOpening} importantForAccessibility={showOpening ? 'no-hide-descendants' : 'auto'} pointerEvents={showOpening ? 'none' : 'auto'}>
+      <View style={S.header}><Text style={S.brand}>RECOMP</Text><Text style={S.eyebrow}>THE WORK CONTINUES.</Text></View>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={[S.content, tab === 'record' && S.recordContent]}>
+          {tab === 'record' && <RecordScreen history={history} workout={workout} onTrain={start} onArchive={() => navigate('archive')}/>}
+          {tab === 'train' && <>
+            <Text style={S.eyebrow}>TRAINING / SESSION</Text><Text style={S.title}>The Work</Text>
+            {!workout ? <Action label="BEGIN TRAINING  →" onPress={start}/> : <WorkoutEditor key={workout.id} workout={workout} history={history} onChange={setWorkout}
+              onSave={() => save(workout, false)} busy={busy || !db} onCancel={() => Alert.alert('Discard session?', 'Unsaved work will be lost.', [
+                { text: 'Cancel', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => setWorkout(null) },
+              ])}/>}
+          </>}
+          {tab === 'archive' && <>
+            <Text style={S.eyebrow}>{editing ? 'ARCHIVE / EDIT SESSION' : 'TRAINING HISTORY'}</Text><Text style={S.title}>{editing ? 'Revise the record.' : 'The Archive'}</Text>
+            {editing ? <WorkoutEditor key={`edit:${editing.id}`} workout={editing} history={history} onChange={setEditing}
+              onSave={() => save(editing, true)} onCancel={cancelEditing} editing busy={busy || !db}/> : <>
+              <Text style={S.muted}>Your work, kept. Tap a session to open it.</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="How personal records work" onPress={() => Alert.alert('Personal records', 'Gold asterisks mark a session with current personal bests. Expand it to see the details. Strength: heaviest set and most reps at the same weight. Cardio: longest interval by duration and distance. Records compare the same exercise name and type across your saved history. First entries establish a baseline; only improvements earn a new PR. On ties, the earliest achievement keeps its badge. Editing or deleting a session recalculates your bests.')} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={S.badge}>HOW RECORDS WORK ↗</Text></Pressable>
+              {history.length === 0 ? <Text style={[S.muted, { marginTop: 24 }]}>No sessions yet.</Text> : history.map(session => <ArchiveSession
+                key={session.id} session={session} records={[...bests.values()].filter(record => record.workoutId === session.id)}
+                onEdit={() => edit(session)} onDelete={() => remove(session.id)} disabled={busy || !db}/>)}
+            </>}
+          </>}
+        </ScrollView>
+      </KeyboardAvoidingView>
+      <View style={S.nav}>{(['record', 'train', 'archive'] as const).map(next => <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === next, disabled: busy }} key={next} style={S.navItem} disabled={busy} onPress={() => navigate(next)}>
+        <Text style={[S.eyebrow, tab === next && { color: C.gold }]}>{next.toUpperCase()}</Text>
+      </Pressable>)}</View>
+    </SafeAreaView>
+    {showOpening && <OpeningSequence onComplete={finishOpening}/>}
+  </View>;
 }
-const S=StyleSheet.create({root:{flex:1,backgroundColor:C.bg},header:{padding:22,borderBottomWidth:1,borderBottomColor:C.line,flexDirection:'row',justifyContent:'space-between',alignItems:'center'},brand:{color:C.ink,fontSize:20,letterSpacing:5,fontWeight:'300'},eyebrow:{color:C.muted,fontSize:10,letterSpacing:1.4},content:{padding:22,paddingBottom:65},recordContent:{paddingHorizontal:28,paddingBottom:36},title:{fontSize:34,color:C.ink,fontWeight:'300',marginVertical:14},quote:{fontSize:18,color:C.gold,marginBottom:16},card:{backgroundColor:C.panel,borderWidth:1,borderColor:C.line,padding:18,borderRadius:6,marginVertical:9,gap:8},number:{fontSize:42,color:C.ink,fontWeight:'300'},subtitle:{color:C.ink,fontSize:21,fontWeight:'400'},text:{color:C.ink},muted:{color:C.muted,fontSize:13,lineHeight:20},button:{borderWidth:1,borderColor:C.line,padding:13,marginTop:8,alignItems:'center',borderRadius:4,flex:1},primary:{backgroundColor:C.gold,borderColor:C.gold},buttonText:{color:C.ink,fontSize:11,letterSpacing:1,fontWeight:'600'},input:{color:C.ink,backgroundColor:C.panel,borderWidth:1,borderColor:C.line,padding:14,borderRadius:4,marginVertical:8},smallInput:{color:C.ink,backgroundColor:C.bg,borderWidth:1,borderColor:C.line,padding:12,flex:1,borderRadius:4},row:{flexDirection:'row',alignItems:'center',gap:8,marginTop:6},nav:{borderTopWidth:1,borderTopColor:C.line,flexDirection:'row',padding:12},navItem:{flex:1,alignItems:'center',justifyContent:'center',minHeight:44,padding:8}});
