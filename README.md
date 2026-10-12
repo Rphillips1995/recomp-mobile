@@ -12,6 +12,12 @@ Quote selection is cached once per JavaScript runtime and the next-quote cursor 
 
 Completed workouts remain saved locally. As before, an **unsaved** active workout lives in memory: background/resume preserves it, but force-quitting the process loses it. This change does not add draft recovery.
 
+## The Record
+
+The dashboard uses serif headings, thin rules, warm gold accents, and an open journal layout. Sessions Recorded counts saved sessions; Training Days counts distinct local calendar days with a saved session, not a streak. Last Recorded shows the most recent saved workout and opens The Archive. Empty and in-progress states have their own copy.
+
+Returning to The Record during a workout offers Continue Training and preserves the current name, exercises, and sets. The opening sequence and SQLite schema are unchanged.
+
 ## Run on an iPhone Simulator
 
 Use Node 20.19.4 or newer, Xcode, and an installed iOS Simulator runtime.

@@ -161,3 +161,20 @@ it('cancels pending animations and callbacks when unmounted', async () => {
   expect(onComplete).not.toHaveBeenCalled();
   expect(removeListener).toHaveBeenCalled();
 });
+
+it('returns to an active workout from The Record without replacing its name or sets', async () => {
+  await render(<App />);
+  skip();
+  press('BEGIN TRAINING  →');
+  act(() => tree.root.findByProps({ accessibilityLabel: 'Workout name' }).props.onChangeText('Keep this workout'));
+  act(() => tree.root.findByProps({ placeholder: 'Exercise name' }).props.onChangeText('Squat'));
+  press('+ ADD EXERCISE');
+  act(() => tree.root.findByProps({ accessibilityLabel: 'Squat weight set 1' }).props.onChangeText('135'));
+  act(() => tree.root.findByProps({ accessibilityLabel: 'Squat reps set 1' }).props.onChangeText('5'));
+  press('RECORD');
+  expect(tree.root.findAll(node => node.props.children === 'CONTINUE TRAINING  →').length).toBeGreaterThan(0);
+  press('CONTINUE TRAINING  →');
+  expect(tree.root.findByProps({ accessibilityLabel: 'Workout name' }).props.value).toBe('Keep this workout');
+  expect(tree.root.findByProps({ accessibilityLabel: 'Squat weight set 1' }).props.value).toBe('135');
+  expect(tree.root.findByProps({ accessibilityLabel: 'Squat reps set 1' }).props.value).toBe('5');
+});
