@@ -14,6 +14,10 @@
     },
     "plugins": [
       "expo-sqlite"
-    ]
+    ],
+    "backgroundColor": "#080A0C",
+    "splash": {
+      "backgroundColor": "#080A0C"
+    }
   }
 }
